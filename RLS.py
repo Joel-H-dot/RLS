@@ -5,19 +5,21 @@ import numpy as np
 class RLS():
     def __init__(self, measurement, initial_prediction, compute_Jacobian_and_resid, forward_model, d_param=1e-50,
                  r_param=1e-50,
-                 lower_constraint=-np.inf, upper_constraint=np.inf, num_iterations=5, search_direction='Levenberg-Marquardt'):
+                 lower_constraint=-np.inf, upper_constraint=np.inf, num_iterations=5, search_direction='Levenberg-Marquardt', reg_type = 'Finite Difference'):
 
+        self.reg_type = reg_type
 
         self.initial_prediction = np.copy(initial_prediction.reshape((len(initial_prediction), 1)))
+        self.current_estimate = np.copy(self.initial_prediction)
         self.num_iterations = num_iterations
 
         self.compute_Jacobian_and_resid = compute_Jacobian_and_resid
         self.forward_model = forward_model
-
+       
 
         self.verbose = True
 
-        self.measurement = measurement.reshape((20,1))
+        self.measurement = measurement.reshape((len(measurement),1))
 
         self.gamma = d_param
         self.lam = r_param
@@ -29,20 +31,21 @@ class RLS():
 
         self.search_direction = search_direction
 
-        self.reg_type = 'Finite Difference'
 
 
         self.Jacobian_hist = np.full((len(self.measurement), len(self.initial_prediction),1), np.nan)
         self.residual_hist = np.full((len(self.measurement), 1,1), np.nan)
         self.current_est_hist = np.full((len(self.initial_prediction), 1,1), np.nan)
 
+        self.regularisation_matrix()
 
+        self.problem = 'non-linear'
 
+        self.f0 = self.LS_function(self.initial_prediction)
 
-    def initialise_search(self):
         if self.search_direction == 'Levenberg-Marquardt' or self.search_direction == 'NL2SOL':
             import TRA.LM as TRA
-            self.inversion_algorithm = TRA.Levenberg_Marquart(self.initial_prediction, 0, self.compute_hessian,
+            self.inversion_algorithm = TRA.Levenberg_Marquart(self.initial_prediction, self.f0, self.compute_hessian,
                                                           self.compute_gradient,
                                                           self.LS_function, d_param=self.gamma,
                                                           lower_constraint=self.lower_constraint,
@@ -50,17 +53,17 @@ class RLS():
                                                           num_iterations=self.num_iterations)
         elif self.search_direction == "Powell's Dogleg":
             import TRA.PD as TRA
-            self.inversion_algorithm = TRA.powells_dogleg(self.initial_prediction, 0, self.compute_hessian,
+            self.inversion_algorithm = TRA.powells_dogleg(self.initial_prediction, self.f0, self.compute_hessian,
                                                           self.compute_gradient,
                                                           self.LS_function, constraint_region=self.gamma,
                                                           lower_constraint=self.lower_constraint,
                                                           upper_constraint=self.upper_constraint,
                                                           num_iterations=self.num_iterations)
 
-
     def LS_function(self, predicted):
 
-        residual = self.forward_model(predicted) - self.measurement
+        self.f_c = self.forward_model(predicted)
+        residual = self.f_c - self.measurement
 
         penalty = np.matmul(self.RM, predicted - self.initial_prediction)
         f = 0.5 * np.linalg.norm(residual) ** 2 + 0.5 * self.lam * np.linalg.norm(penalty) ** 2
@@ -91,8 +94,8 @@ class RLS():
 
     def compute_hessian(self, current_estimate):
 
-
-        self.J, self.residual = self.compute_Jacobian_and_resid(current_estimate)
+        if self.problem == 'non-linear':
+            self.J, self.residual = self.compute_Jacobian_and_resid(current_estimate)
 
 
         self.Jacobian_hist = np.concatenate((self.Jacobian_hist, self.J.reshape((len(self.measurement), len(self.initial_prediction),1))),axis=2)
@@ -101,6 +104,7 @@ class RLS():
 
 
         self.JT = np.transpose(self.J)
+
 
         hess_regularised = np.matmul(self.JT, self.J) + self.lam * self.RM_square
 
@@ -161,14 +165,11 @@ class RLS():
     def compute_minimum(self):
 
 
-        self.regularisation_matrix()
-        self.initialise_search()
-
-        f0 = self.LS_function(self.initial_prediction)
-        self.inversion_algorithm.f0 = f0
-
+        self.inversion_algorithm.current_estimate = self.current_estimate
 
         reconstructed = self.inversion_algorithm.optimisation_main()
+
+        print(reconstructed)
 
         return reconstructed
 
